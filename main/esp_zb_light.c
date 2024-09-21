@@ -16,14 +16,13 @@ static const char *TAG = "ESP_ZB_ON_OFF_LIGHT";
 /********************* Define functions **************************/
 static esp_err_t deferred_driver_init(void)
 {
-    light_driver_init(LIGHT_DEFAULT_ON);
-    light_driver_set_color_RGB(0, 255, 0);
+    light_driver_init(LIGHT_DEFAULT_OFF);
     return ESP_OK;
 }
 
 static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask)
 {
-    ESP_ERROR_CHECK(esp_zb_bdb_start_top_level_commissioning(mode_mask));
+    ESP_RETURN_ON_FALSE(esp_zb_bdb_start_top_level_commissioning(mode_mask) == ESP_OK, , TAG, "Failed to start Zigbee commissioning");
 }
 
 void reportAttribute(uint16_t clusterID, uint16_t attributeID, void *value)
@@ -55,6 +54,9 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
 {
     esp_err_t ret = ESP_OK;
     bool light_state = 0;
+    uint8_t light_level = 0;
+    uint16_t light_color_x = 0;
+    uint16_t light_color_y = 0;
     ESP_RETURN_ON_FALSE(message, ESP_FAIL, TAG, "Empty message");
     ESP_RETURN_ON_FALSE(message->info.status == ESP_ZB_ZCL_STATUS_SUCCESS, ESP_ERR_INVALID_ARG, TAG, "Received message: error status(%d)",
                         message->info.status);
@@ -62,14 +64,48 @@ static esp_err_t zb_attribute_handler(const esp_zb_zcl_set_attr_value_message_t 
              message->attribute.id, message->attribute.data.size);
     if (message->info.dst_endpoint == HA_ESP_LIGHT_ENDPOINT)
     {
-        if (message->info.cluster == ESP_ZB_ZCL_CLUSTER_ID_ON_OFF)
+        switch (message->info.cluster)
         {
+        case (ESP_ZB_ZCL_CLUSTER_ID_ON_OFF):
             if (message->attribute.id == ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID && message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_BOOL)
             {
                 light_state = message->attribute.data.value ? *(bool *)message->attribute.data.value : light_state;
                 ESP_LOGI(TAG, "Light sets to %s", light_state ? "On" : "Off");
                 light_driver_set_power(light_state);
+            } else {
+                ESP_LOGW(TAG, "On/Off cluster data: attribute(0x%x), type(0x%x)", message->attribute.id, message->attribute.data.type);
             }
+            break;
+        case ESP_ZB_ZCL_CLUSTER_ID_COLOR_CONTROL:
+            if (message->attribute.id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID && message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16) {
+                light_color_x = message->attribute.data.value ? *(uint16_t *)message->attribute.data.value : light_color_x;
+                light_color_y = *(uint16_t *)esp_zb_zcl_get_attribute(message->info.dst_endpoint, message->info.cluster,
+                                                                      ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID)
+                                     ->data_p;
+                ESP_LOGI(TAG, "Light color x changes to 0x%x", light_color_x);
+            } else if (message->attribute.id == ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_Y_ID &&
+                       message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U16) {
+                light_color_y = message->attribute.data.value ? *(uint16_t *)message->attribute.data.value : light_color_y;
+                light_color_x = *(uint16_t *)esp_zb_zcl_get_attribute(message->info.dst_endpoint, message->info.cluster,
+                                                                      ESP_ZB_ZCL_CLUSTER_SERVER_ROLE, ESP_ZB_ZCL_ATTR_COLOR_CONTROL_CURRENT_X_ID)
+                                     ->data_p;
+                ESP_LOGI(TAG, "Light color y changes to 0x%x", light_color_y);
+            } else {
+                ESP_LOGW(TAG, "Color control cluster data: attribute(0x%x), type(0x%x)", message->attribute.id, message->attribute.data.type);
+            }
+            light_driver_set_color_xy(light_color_x, light_color_y);
+            break;
+        case ESP_ZB_ZCL_CLUSTER_ID_LEVEL_CONTROL:
+            if (message->attribute.id == ESP_ZB_ZCL_ATTR_LEVEL_CONTROL_CURRENT_LEVEL_ID && message->attribute.data.type == ESP_ZB_ZCL_ATTR_TYPE_U8) {
+                light_level = message->attribute.data.value ? *(uint8_t *)message->attribute.data.value : light_level;
+                light_driver_set_level((uint8_t)light_level);
+                ESP_LOGI(TAG, "Light level changes to %d", light_level);
+            } else {
+                ESP_LOGW(TAG, "Level Control cluster data: attribute(0x%x), type(0x%x)", message->attribute.id, message->attribute.data.type);
+            }
+            break;
+        default:
+            ESP_LOGI(TAG, "Message data: cluster(0x%x), attribute(0x%x)  ", message->info.cluster, message->attribute.id);
         }
     }
     return ret;
@@ -150,10 +186,10 @@ static void esp_zb_task(void *pvParameters)
     /* initialize Zigbee stack */
     esp_zb_cfg_t zb_nwk_cfg = ESP_ZB_ZED_CONFIG();
     esp_zb_init(&zb_nwk_cfg);
-        // ------------------------------ Cluster BASIC ------------------------------
+    // ------------------------------ Cluster BASIC ------------------------------
     esp_zb_basic_cluster_cfg_t basic_cluster_cfg = {
         .zcl_version = ESP_ZB_ZCL_BASIC_ZCL_VERSION_DEFAULT_VALUE,
-        .power_source = 0x03,
+        .power_source = 0x01
     };
     uint32_t ApplicationVersion = 0x0001;
     uint32_t StackVersion = 0x0001;
@@ -169,30 +205,35 @@ static void esp_zb_task(void *pvParameters)
     esp_zb_basic_cluster_add_attr(esp_zb_basic_cluster, ESP_ZB_ZCL_ATTR_BASIC_MODEL_IDENTIFIER_ID, ModelIdentifier);
     esp_zb_basic_cluster_add_attr(esp_zb_basic_cluster, ESP_ZB_ZCL_ATTR_BASIC_DATE_CODE_ID, DateCode);
 
-    // ------------------------------ Cluster IDENTIFY ------------------------------
-    esp_zb_identify_cluster_cfg_t identify_cluster_cfg = {
-        .identify_time = 0,
-    };
-    esp_zb_attribute_list_t *esp_zb_identify_cluster = esp_zb_identify_cluster_create(&identify_cluster_cfg);
+    // // ------------------------------ Cluster IDENTIFY ------------------------------
+    // esp_zb_identify_cluster_cfg_t identify_cluster_cfg = {
+    //     .identify_time = 0,
+    // };
+    // esp_zb_attribute_list_t *esp_zb_identify_cluster = esp_zb_identify_cluster_create(&identify_cluster_cfg);
 
     // ------------------------------ Cluster LIGHT ------------------------------
-    esp_zb_on_off_cluster_cfg_t on_off_cfg = {
-        .on_off = 0,
-    };
-    esp_zb_attribute_list_t *esp_zb_on_off_cluster = esp_zb_on_off_cluster_create(&on_off_cfg);
+    esp_zb_on_off_light_cfg_t light_cfg = ESP_ZB_DEFAULT_ON_OFF_LIGHT_CONFIG();
+    esp_zb_attribute_list_t *esp_zb_on_off_cluster = esp_zb_on_off_cluster_create(&light_cfg);
+
+    // esp_zb_color_dimmable_light_cfg_t light_cfg = ESP_ZB_DEFAULT_COLOR_DIMMABLE_LIGHT_CONFIG();
+    // esp_zb_attribute_list_t *esp_zb_color_dimmable_light_cluster = esp_zb_color_dimmable_light_ep_create(HA_ESP_LIGHT_ENDPOINT, &light_cfg);
+
+    // esp_zb_ep_list_t *esp_zb_color_dimmable_light_ep = esp_zb_color_dimmable_light_ep_create(HA_COLOR_DIMMABLE_LIGHT_ENDPOINT, &light_cfg);
+    // esp_zb_device_register(esp_zb_color_dimmable_light_ep);
 
     // ------------------------------ Create cluster list ------------------------------
     esp_zb_cluster_list_t *esp_zb_cluster_list = esp_zb_zcl_cluster_list_create();
     esp_zb_cluster_list_add_basic_cluster(esp_zb_cluster_list, esp_zb_basic_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
     esp_zb_cluster_list_add_identify_cluster(esp_zb_cluster_list, esp_zb_identify_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
     esp_zb_cluster_list_add_on_off_cluster(esp_zb_cluster_list, esp_zb_on_off_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
-    
+    // esp_zb_cluster_list_add_color_control_cluster(esp_zb_cluster_list, esp_zb_color_dimmable_light_cluster, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE);
+
     // ------------------------------ Create endpoint list ------------------------------
     esp_zb_ep_list_t *esp_zb_ep_list = esp_zb_ep_list_create();
     esp_zb_endpoint_config_t endpoint_config = {
         .endpoint = HA_ESP_LIGHT_ENDPOINT,
         .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
-        .app_device_id = ESP_ZB_HA_COLOR_DIMMABLE_LIGHT_DEVICE_ID,
+        .app_device_id = ESP_ZB_HA_ON_OFF_LIGHT_DEVICE_ID,
         .app_device_version = 0,
     };
     esp_zb_ep_list_add_ep(esp_zb_ep_list, esp_zb_cluster_list, endpoint_config);
