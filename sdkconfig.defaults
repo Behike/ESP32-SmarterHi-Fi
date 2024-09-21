@@ -26,7 +26,7 @@ CONFIG_MBEDTLS_ECJPAKE_C=y
 # Zboss
 #
 CONFIG_ZB_ENABLED=y
-CONFIG_ZB_ZCZR=y
+CONFIG_ZB_ZED=y
 # end of Zboss
 
 #
