@@ -160,7 +160,7 @@ static void esp_zb_task(void *pvParameters)
     uint32_t HWVersion = 0x0001;
     uint8_t ManufacturerName[] = {11, 'H', 'o', 'm', 'e', 'm', 'a', 'd', 'e', '&', 'c', 'o'}; // warning: this is in format {length, 'string'} :
     uint8_t ModelIdentifier[] = {16, 'P','l','a','y','e','r','C','o','n','t','r','o','l','l','e','r'};
-    uint8_t DateCode[] = {8, '2', '0', '2', '4', '0', '4', '0', '1'};
+    uint8_t DateCode[] = {8, '2', '0', '2', '4', '0', '9', '2', '0'};
     esp_zb_attribute_list_t *esp_zb_basic_cluster = esp_zb_basic_cluster_create(&basic_cluster_cfg);
     esp_zb_basic_cluster_add_attr(esp_zb_basic_cluster, ESP_ZB_ZCL_ATTR_BASIC_APPLICATION_VERSION_ID, &ApplicationVersion);
     esp_zb_basic_cluster_add_attr(esp_zb_basic_cluster, ESP_ZB_ZCL_ATTR_BASIC_STACK_VERSION_ID, &StackVersion);
@@ -189,7 +189,13 @@ static void esp_zb_task(void *pvParameters)
     
     // ------------------------------ Create endpoint list ------------------------------
     esp_zb_ep_list_t *esp_zb_ep_list = esp_zb_ep_list_create();
-    esp_zb_ep_list_add_ep(esp_zb_ep_list, esp_zb_cluster_list, HA_ESP_LIGHT_ENDPOINT, ESP_ZB_AF_HA_PROFILE_ID, ESP_ZB_HA_SIMPLE_SENSOR_DEVICE_ID);
+    esp_zb_endpoint_config_t endpoint_config = {
+        .endpoint = HA_ESP_LIGHT_ENDPOINT,
+        .app_profile_id = ESP_ZB_AF_HA_PROFILE_ID,
+        .app_device_id = ESP_ZB_HA_COLOR_DIMMABLE_LIGHT_DEVICE_ID,
+        .app_device_version = 0,
+    };
+    esp_zb_ep_list_add_ep(esp_zb_ep_list, esp_zb_cluster_list, endpoint_config);
 
     // ------------------------------ Register Device ------------------------------
     esp_zb_device_register(esp_zb_ep_list);
@@ -197,7 +203,7 @@ static void esp_zb_task(void *pvParameters)
     esp_zb_set_primary_network_channel_set(ESP_ZB_PRIMARY_CHANNEL_MASK);
 
     ESP_ERROR_CHECK(esp_zb_start(false));
-    esp_zb_main_loop_iteration();
+    esp_zb_stack_main_loop();
 }
 
 void app_main(void)
