@@ -42,24 +42,12 @@ typedef struct zdo_info_ctx_s {
     uint16_t short_addr;
 } zdo_info_user_ctx_t;
 
-/* remote device struct for recording and managing node info */
-light_bulb_device_params_t on_off_light;
-
 static void zb_buttons_handler(switch_func_pair_t *button_func_pair)
 {
     switch (button_func_pair->func) {
     case SWITCH_ONOFF_TOGGLE_CONTROL: {
-        /* send on-off toggle command to remote device */
-        esp_zb_zcl_on_off_cmd_t cmd_req;
-        cmd_req.zcl_basic_cmd.dst_addr_u.addr_short = on_off_light.short_addr;
-        cmd_req.zcl_basic_cmd.dst_endpoint = on_off_light.endpoint;
-        cmd_req.zcl_basic_cmd.src_endpoint = HA_ONOFF_SWITCH_ENDPOINT;
-        cmd_req.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
-        cmd_req.on_off_cmd_id = ESP_ZB_ZCL_CMD_ON_OFF_TOGGLE_ID;
-        esp_zb_lock_acquire(portMAX_DELAY);
-        esp_zb_zcl_on_off_cmd_req(&cmd_req);
-        esp_zb_lock_release();
-        ESP_EARLY_LOGI(TAG, "Send 'on_off toggle' command to address(0x%x) endpoint(%d)", on_off_light.short_addr, on_off_light.endpoint);
+        // TODO: Switch GPIO values and read LED value to update state
+        ESP_EARLY_LOGI(TAG, "Toggling switch...");
     } break;
     default:
         break;
@@ -76,110 +64,6 @@ static esp_err_t deferred_driver_init(void)
 static void bdb_start_top_level_commissioning_cb(uint8_t mode_mask)
 {
     ESP_RETURN_ON_FALSE(esp_zb_bdb_start_top_level_commissioning(mode_mask) == ESP_OK, , TAG, "Failed to start Zigbee bdb commissioning");
-}
-
-static void bind_cb(esp_zb_zdp_status_t zdo_status, void *user_ctx)
-{
-    if (zdo_status == ESP_ZB_ZDP_STATUS_SUCCESS) {
-        ESP_LOGI(TAG, "Bind response from address(0x%x), endpoint(%d) with status(%d)", ((zdo_info_user_ctx_t *)user_ctx)->short_addr,
-                 ((zdo_info_user_ctx_t *)user_ctx)->endpoint, zdo_status);
-        /* configure report attribute command */
-        esp_zb_zcl_config_report_cmd_t report_cmd;
-        bool report_change = 0;
-        report_cmd.zcl_basic_cmd.dst_addr_u.addr_short = on_off_light.short_addr;
-        report_cmd.zcl_basic_cmd.dst_endpoint = on_off_light.endpoint;
-        report_cmd.zcl_basic_cmd.src_endpoint = HA_ONOFF_SWITCH_ENDPOINT;
-        report_cmd.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
-        report_cmd.clusterID = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF;
-
-        esp_zb_zcl_config_report_record_t records[] = {
-            {ESP_ZB_ZCL_CMD_DIRECTION_TO_SRV, ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, ESP_ZB_ZCL_ATTR_TYPE_BOOL, 0, 30, &report_change}};
-        report_cmd.record_number = sizeof(records) / sizeof(esp_zb_zcl_config_report_record_t);
-        report_cmd.record_field = records;
-
-        esp_zb_zcl_config_report_cmd_req(&report_cmd);
-    }
-}
-
-static void ieee_cb(esp_zb_zdp_status_t zdo_status, esp_zb_ieee_addr_t ieee_addr, void *user_ctx)
-{
-    if (zdo_status == ESP_ZB_ZDP_STATUS_SUCCESS) {
-        memcpy(&(on_off_light.ieee_addr), ieee_addr, sizeof(esp_zb_ieee_addr_t));
-        ESP_LOGI(TAG, "IEEE address: %02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x",
-                 ieee_addr[7], ieee_addr[6], ieee_addr[5], ieee_addr[4],
-                 ieee_addr[3], ieee_addr[2], ieee_addr[1], ieee_addr[0]);
-        /* bind the on-off light to on-off switch */
-        esp_zb_zdo_bind_req_param_t bind_req;
-        memcpy(&(bind_req.src_address), on_off_light.ieee_addr, sizeof(esp_zb_ieee_addr_t));
-        bind_req.src_endp = on_off_light.endpoint;
-        bind_req.cluster_id = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF;
-        bind_req.dst_addr_mode = ESP_ZB_ZDO_BIND_DST_ADDR_MODE_64_BIT_EXTENDED;
-        esp_zb_get_long_address(bind_req.dst_address_u.addr_long);
-        bind_req.dst_endp = HA_ONOFF_SWITCH_ENDPOINT;
-        bind_req.req_dst_addr = on_off_light.short_addr;
-        static zdo_info_user_ctx_t test_info_ctx;
-        test_info_ctx.endpoint = HA_ONOFF_SWITCH_ENDPOINT;
-        test_info_ctx.short_addr = on_off_light.short_addr;
-        esp_zb_zdo_device_bind_req(&bind_req, bind_cb, (void *) & (test_info_ctx));
-    }
-}
-
-static void ep_cb(esp_zb_zdp_status_t zdo_status, uint8_t ep_count, uint8_t *ep_id_list, void *user_ctx)
-{
-    if (zdo_status == ESP_ZB_ZDP_STATUS_SUCCESS) {
-        ESP_LOGI(TAG, "Active endpoint response: status(%d) and endpoint count(%d)", zdo_status, ep_count);
-        for (int i = 0; i < ep_count; i++) {
-            ESP_LOGI(TAG, "Endpoint ID List: %d", ep_id_list[i]);
-        }
-    }
-}
-
-static void simple_desc_cb(esp_zb_zdp_status_t zdo_status, esp_zb_af_simple_desc_1_1_t *simple_desc, void *user_ctx)
-{
-    if (zdo_status == ESP_ZB_ZDP_STATUS_SUCCESS) {
-        ESP_LOGI(TAG, "Simple desc response: status(%d), device_id(%d), app_version(%d), profile_id(0x%x), endpoint_ID(%d)", zdo_status,
-                 simple_desc->app_device_id, simple_desc->app_device_version, simple_desc->app_profile_id, simple_desc->endpoint);
-
-        for (int i = 0; i < (simple_desc->app_input_cluster_count + simple_desc->app_output_cluster_count); i++) {
-            ESP_LOGI(TAG, "Cluster ID list: 0x%x", *(simple_desc->app_cluster_list + i));
-        }
-    }
-}
-
-static void user_find_cb(esp_zb_zdp_status_t zdo_status, uint16_t addr, uint8_t endpoint, void *user_ctx)
-{
-    if (zdo_status == ESP_ZB_ZDP_STATUS_SUCCESS) {
-        ESP_LOGI(TAG, "Match desc response: status(%d), address(0x%x), endpoint(%d)", zdo_status, addr, endpoint);
-        /* save into remote device record structure for future use */
-        on_off_light.endpoint = endpoint;
-        on_off_light.short_addr = addr;
-        /* find the active endpoint */
-        esp_zb_zdo_active_ep_req_param_t active_ep_req;
-        active_ep_req.addr_of_interest = on_off_light.short_addr;
-        esp_zb_zdo_active_ep_req(&active_ep_req, ep_cb, NULL);
-        /* get the node simple descriptor */
-        esp_zb_zdo_simple_desc_req_param_t simple_desc_req;
-        simple_desc_req.addr_of_interest = addr;
-        simple_desc_req.endpoint = endpoint;
-        esp_zb_zdo_simple_desc_req(&simple_desc_req, simple_desc_cb, NULL);
-        /* get the light ieee address */
-        esp_zb_zdo_ieee_addr_req_param_t ieee_req;
-        ieee_req.addr_of_interest = on_off_light.short_addr;
-        ieee_req.dst_nwk_addr = on_off_light.short_addr;
-        ieee_req.request_type = 0;
-        ieee_req.start_index = 0;
-        esp_zb_zdo_ieee_addr_req(&ieee_req, ieee_cb, NULL);
-        esp_zb_zcl_read_attr_cmd_t read_req;
-        uint16_t attributes[] = {ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID};
-        read_req.address_mode = ESP_ZB_APS_ADDR_MODE_16_ENDP_PRESENT;
-        read_req.attr_number = sizeof(attributes) / sizeof(uint16_t);
-        read_req.attr_field = attributes;
-        read_req.clusterID = ESP_ZB_ZCL_CLUSTER_ID_ON_OFF;
-        read_req.zcl_basic_cmd.dst_endpoint = on_off_light.endpoint;
-        read_req.zcl_basic_cmd.src_endpoint = HA_ONOFF_SWITCH_ENDPOINT;
-        read_req.zcl_basic_cmd.dst_addr_u.addr_short = on_off_light.short_addr;
-        esp_zb_zcl_read_attr_cmd_req(&read_req);
-    }
 }
 
 void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
@@ -204,11 +88,6 @@ void esp_zb_app_signal_handler(esp_zb_app_signal_t *signal_struct)
                      extended_pan_id[7], extended_pan_id[6], extended_pan_id[5], extended_pan_id[4],
                      extended_pan_id[3], extended_pan_id[2], extended_pan_id[1], extended_pan_id[0],
                      esp_zb_get_pan_id(), esp_zb_get_current_channel(), esp_zb_get_short_address());
-            esp_zb_zdo_match_desc_req_param_t  find_req;
-            find_req.addr_of_interest = 0x0000;
-            find_req.dst_nwk_addr = 0x0000;
-            /* find the match on-off light device */
-            esp_zb_zdo_find_on_off_light(&find_req, user_find_cb, NULL);
         }
         break;
     case ESP_ZB_ZDO_SIGNAL_LEAVE:
